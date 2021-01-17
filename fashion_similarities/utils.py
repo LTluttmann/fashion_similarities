@@ -7,6 +7,12 @@ import numpy as np
 import urllib.request
 import io
 import sqlite3
+from PIL import Image, ImageOps
+import copy
+from keras.preprocessing.image import load_img, img_to_array
+import bisect
+from shutil import copyfile
+import subprocess
 
 URL = "https://raw.github.com/zalandoresearch/fashion-mnist/master/data/fashion/"
 
@@ -48,20 +54,6 @@ class DBConnect:
 
 
 class GetSimpleData:
-    def __init__(self, path=None):
-        self.path = path
-
-    def load_mnist(self, kind='train'):
-        if kind == "test":
-            kind = "t10k"
-        """Load MNIST data from github"""
-        if not self.path:
-            images, labels = self.load_from_github(kind)
-        else:
-            images, labels = self._loaf_from_path(kind)
-
-        return images, labels
-
     @staticmethod
     def load_from_github(kind="train"):
         if kind == "test":
@@ -85,7 +77,55 @@ class GetSimpleData:
 
         return images, labels
 
-    def _loaf_from_path(self, kind):
+    @staticmethod
+    def list_files(dir, sort=True):
+        r = []
+        subdirs = [x[0] for x in os.walk(dir)]
+        for subdir in subdirs:
+            files = os.walk(subdir).__next__()[2]
+            if len(files) > 0:
+                for file in files:
+                    if sort:
+                        bisect.insort(r, os.path.join(subdir, file))
+                    else:
+                        r.append(os.path.join(subdir, file))
+        return r
+
+    @staticmethod
+    def load_img_from_path(path, subset_size=None, return_id=False):
+        images = GetSimpleData.list_files(path)
+        subset_size = subset_size if subset_size else len(images)
+        images = images[:subset_size]
+        dataset = np.zeros((len(images), *img_to_array(load_img(images[0])).shape), dtype="uint8")
+        row_id_dict = dict()
+        for i, _file in enumerate(images):
+            id = _file.replace('\\', '/').split("/")[-1].split(".")[0]
+            img = load_img(_file)
+            img = img_to_array(img).astype("uint8")
+            dataset[i] = img
+            row_id_dict[i] = id
+            if i % 10000 == 0:
+                print(f"currently at {i}")
+        if return_id:
+            return dataset, row_id_dict
+        else:
+            return dataset
+
+    def __init__(self, path=None):
+        self.path = path
+
+    def load_mnist(self, kind='train'):
+        if kind == "test":
+            kind = "t10k"
+        """Load MNIST data from github"""
+        if not self.path:
+            images, labels = self.load_from_github(kind)
+        else:
+            images, labels = self._load_from_path(kind)
+
+        return images, labels
+
+    def _load_from_path(self, kind):
         labels_path = os.path.join(self.path,
                                    '%s-labels-idx1-ubyte.gz'
                                    % kind)
@@ -104,8 +144,70 @@ class GetSimpleData:
         return images, labels
 
 
+class Preprocessing:
+    @staticmethod
+    def resize_img_with_borders(img: Image, new_size: tuple) -> Image:
+        """
+        this function resizes an image to a requested size which must be lower than the current
+        size. This function uses thumbnail to preserve the aspect ratio of the image in order not to
+        stretch it in any direction. It than fills up the missing pixels with a white border..
+        :param img: img of class Pillow image to be resized
+        :param new_size: requested size in format (width, height)
+        :return: resized img
+        """
+        def add_borders(img_to_add, new_shape):
+            old_shape = img_to_add.width, img_to_add.height
+            deltaw = new_shape[0] - old_shape[0]
+            deltah = new_shape[1] - old_shape[1]
+            brd = (deltaw//2, deltah//2, deltaw-(deltaw//2), deltah-(deltah//2))
+            img_exp = ImageOps.expand(img_to_add, brd, fill="white")
+            return img_exp
+
+        new_img = copy.deepcopy(img)
+        new_img.thumbnail(new_size)
+        if new_img.width != new_size[0] or new_img.height != new_size[1] :
+            new_img = add_borders(new_img, new_size)
+        return new_img
+
+    @staticmethod
+    def train_test_split(img_file_path: list, data_dst_path):
+        def copy_func(src, dst):
+            """
+            this function copies data from a source to a destination path and does that by using a function
+            that is appropriate for the respective operating system
+            :param src: path to file source
+            :param dst: path to destination
+            :return: executes the copy process
+            """
+            if os.name == "nt":  # windows case
+                copyfile(_file, dst)
+            elif os.name == "posix":
+                subprocess.call(f"cp {src} {dst}", shell=True)
+        np.random.seed(12345)
+        test_frac = .2
+        for i, _file in enumerate(img_file_path[:]):
+            # extract filename
+            filename = _file.replace("\\", "/").split("/")[-1]
+            if i % 1000 == 0:
+                print(f"Processing the {i}th image")
+            if not (
+                    os.path.exists(os.path.join(data_dst_path, "img_train", filename)) or
+                    os.path.exists(os.path.join(data_dst_path, "img_test", filename)) or
+                    os.path.exists(os.path.join(data_dst_path, "img_validation", filename))
+            ):
+                if np.random.random() < test_frac:
+                    if np.random.random() < .5:
+                        copy_func(src=_file, dst=(os.path.join(data_dst_path, "img_test", filename)))
+                    else:
+                        copy_func(src=_file, dst=(os.path.join(data_dst_path, "img_validation", filename)))
+                else:
+                    copy_func(src=_file, dst=(os.path.join(data_dst_path, "img_train", filename)))
+
+
 if __name__ == "__main__":
-    data_getter = GetSimpleData()
-    x_train, y_train = data_getter.load_mnist()
-    x_test, y_test = data_getter.load_mnist(kind="test")
+    data = GetSimpleData.load_img_from_path("../../../data/archive/images_prep", None, False)
+    print(f"Got {len(data)} data points with memory consumption: {data.nbytes // 1000000} MB")
+    # data_getter = GetSimpleData()
+    # x_train, y_train = data_getter.load_mnist()
+    # x_test, y_test = data_getter.load_mnist(kind="test")
 
