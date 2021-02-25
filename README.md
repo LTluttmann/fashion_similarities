@@ -1,2 +1,2 @@
 # fashion_similarities
-![CAE Architecture](architecutre.png?raw=true "CAE Architecture")
+![CAE Architecture](https://github.com/LTluttmann/fashion_similarities/blob/master/architecture.png?raw=true)
