@@ -1,2 +1,2 @@
 # fashion_similarities
-![CAE Architecture](architecutre.jpg?raw=true "CAE Architecture")
+![CAE Architecture](architecutre.png?raw=true "CAE Architecture")
