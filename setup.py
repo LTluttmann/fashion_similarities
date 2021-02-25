@@ -2,7 +2,7 @@ from setuptools import setup
 
 setup(
     name='FashionSimilarities',
-    version='0.2.0',
+    version='0.5.0',
     author='Laurin Luttmann',
     packages=['fashion_similarities', 'fashion_similarities.test'],
     license='LICENSE.txt',

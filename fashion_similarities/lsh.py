@@ -1,7 +1,8 @@
 import numpy as np
 from joblib import Parallel, delayed
-from sklearn.model_selection import KFold
+from sklearn.model_selection import train_test_split
 import itertools
+import warnings
 
 
 class LSH:
@@ -29,15 +30,12 @@ class LSH:
         return np.sqrt(np.dot(diff, diff))
 
     @staticmethod
-    def product_dict(**kwargs):
-        keys = kwargs.keys()
-        vals = kwargs.values()
-        for instance in itertools.product(*vals):
-            yield dict(zip(keys, instance))
+    def product_dict(grid):
+        return list(dict(zip(grid, x)) for x in itertools.product(*grid.values()))
 
     def __init__(
             self,
-            data,
+            data: dict,
             num_total_hashes,
             rows_per_band,
             hash_func="euclidean",
@@ -45,16 +43,15 @@ class LSH:
             bucket_width=None,
             quantile=0.05
     ):
-        self.data = data  # data in the form of observations X dimensions
-        self.dim = self.data.shape[1]
+        self.data = data if isinstance(data, dict) else dict(zip(list(range(len(data))), data))
+        self.dim = len(list(self.data.values())[0])
         self.num_hashes = num_total_hashes
         self.num_rows = rows_per_band
         self.num_bands = int(np.ceil(num_total_hashes / rows_per_band))
         self.bucket_width = bucket_width or self.choose_bucket_width(quantile) if hash_func == "euclidean" else None
         self.hash_tables = [dict() for _table in range(self.num_bands)]
         self._generate_random_hyperplanes()
-        if self.bucket_width:
-            self._generate_random_offsets()
+        self._generate_random_offsets()
         # define the hash function
         if hash_func == "cosine":
             self.hash_func = self.get_hash_cosine
@@ -86,11 +83,11 @@ class LSH:
         some random initialization method for bucket width if not specified
         :return:
         """
-        points_ind = list(range(self.data.shape[0]))
+        points_ind = list(self.data.keys())
         dists = []
-        for _i in range(500):
+        for _i in range(1500):
             sample_points = np.random.choice(points_ind, 2, replace=False)
-            dists.append(self.calc_dist_euclidean(*self.data[sample_points, :]))
+            dists.append(self.calc_dist_euclidean(*[self.data[sample] for sample in sample_points]))
         quant = np.quantile(dists, quantile)
         print(f"estimated {quantile * 100} % quantile distance is {quant}")
         return quant
@@ -122,13 +119,14 @@ class LSH:
         )
 
     def build_hashtables(self):
-        for index, input_point in enumerate(self.data):
+        for index, input_point in self.data.items():
             for i, table in enumerate(self.hash_tables):
                 table.setdefault(self.hash_func(input_point, i), []).append(index)
 
     def get_near_duplicates(
             self,
             query: list,
+            query_id=None,
             num_duplicates: int = None,
             add_query_to_db: bool = False,
             verbose=True
@@ -139,7 +137,10 @@ class LSH:
             hash = self.hash_func(query, i)
             candidates.extend(table.get(hash, []))
         if add_query_to_db:
-            self.extend_hash_tables(list(query))
+            if not query_id:
+                warnings.warn("can´t add to db without a key")
+            else:
+                self.extend_hash_tables(list(query), query_id=query_id)
         candidates = set(candidates)
         if not verbose:
             print(f"{len(candidates)} candidates have been retrieved. Calculate exact distance on those..")
@@ -147,14 +148,14 @@ class LSH:
         candidates.sort(key=lambda x: x[1])
         return candidates[:num_duplicates] if num_duplicates else candidates
 
-    def extend_hash_tables(self, add_point: list):
-        self.data = np.vstack((self.data, np.array(add_point)))
+    def extend_hash_tables(self, query: list, query_id):
+        self.data = self.data.update({query_id: query})
         for i, table in enumerate(self.hash_tables):
-            hash_value = self.hash_func(add_point, i)
-            table.setdefault(hash_value, []).append(self.data.shape[0]-1)
+            hash_value = self.hash_func(query, i)
+            table.setdefault(hash_value, []).append(query_id)
 
     @staticmethod
-    def get_optimal_params(data, grid, nfold=5, top_k=10, njobs=1, verbose=1):
+    def get_optimal_params(data, grid, top_k=10, njobs=1, verbose=1):
         """
         optimizes the hyperparameters for a given lsh model
         :param grid: grid to be tuned from, e. g. {num_hashes: [100, 200], rows_per_band: [5, 10]}
@@ -163,12 +164,13 @@ class LSH:
         :param njobs: parallelization option
         :return: best hyperparameter set found
         """
-        def get_score(data, train_index, test_index, params, top_k):
-            X_train, X_test = data[train_index], data[test_index]
+        def get_score(X_train, X_test, params, top_k):
+            print(params)
             lsh = LSH(data=X_train, hash_func='euclidean', dist_metric='euclidean', **params)
             lsh.build_hashtables()
             scores = []
-            for query in X_test:
+            np.random.shuffle(X_test)
+            for query in X_test[:50]:
                 cands = lsh.get_near_duplicates(query)
                 retrievals = [i[0] for i in cands[:top_k]]
                 dists = {idx: LSH.calc_dist_euclidean(query, embedding) for idx, embedding in enumerate(X_train)}
@@ -177,23 +179,15 @@ class LSH:
                 c = sum(el in true_closest for el in retrievals)
                 # determine the fraction of candidates to the total population
                 frac = len(cands) / len(X_train)
-                scores.append(0.8 * (c / top_k) + 0.2 * (1 - frac))
+                scores.append(0.75 * (c / top_k) + 0.25 * (1 - frac))
             return np.mean(scores)
 
-        parallel = Parallel(n_jobs=njobs, verbose=verbose)
-        with parallel:
-            kf_splits = KFold(nfold, random_state=12345)
-            cart_product = LSH.product_dict(**grid)
-            res_per_comb = {}
-            opt_params = {}
-            for i, params in enumerate(cart_product):
-                print(params)
-                opt_params[i] = params
-                results = parallel(
-                    delayed(get_score)(data, train_index, test_index, params, top_k)
-                    for train_index, test_index in kf_splits.split(data)
-                )
-                res_per_comb[i] = np.mean(results)
-            best_comb = max(res_per_comb, key=res_per_comb.get)
-            max_score = max(res_per_comb.values())
-        return opt_params[best_comb], max_score
+        cart_product = LSH.product_dict(grid)
+        X_train, X_test = train_test_split(data, test_size=.2)
+        with Parallel(n_jobs=njobs, verbose=verbose) as parallel:
+            results = parallel(
+                delayed(get_score)(X_train, X_test, params, top_k) for params in cart_product
+            )
+            best_params_idx = np.argmax(results)
+            best_score = np.max(results)
+        return list(cart_product)[best_params_idx], best_score

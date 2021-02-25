@@ -1,99 +1,174 @@
-from tensorflow.keras import losses
-from tensorflow.keras.datasets import fashion_mnist
 # deep learning modules
-from keras.layers import Input, Conv2D, Activation, Dense, Flatten, Reshape, LeakyReLU, \
-    BatchNormalization, Conv2DTranspose
-from keras.models import Model, Sequential, load_model
+from keras.layers import (
+    Input,
+    Conv2D,
+    Activation,
+    Dense,
+    Flatten,
+    Reshape,
+    PReLU,
+    BatchNormalization,
+    GaussianNoise,
+    MaxPooling2D,
+    UpSampling2D
+)
+from keras.models import Model
+from keras.initializers import Constant
 from tensorflow.keras import backend as K
-from keras.optimizers import Adam
-
-# import callbacks
-from keras.callbacks import ModelCheckpoint
 
 # import the necessary packages
 import numpy as np
-import os
+from fashion_similarities.custom_layers import (
+    TiedConv2DTranspose,
+    DenseTied
+)
 
 
-class ConvolutionalAutoencoder(Model):
+class ConvAutoencoder:
     @staticmethod
-    def build_encoder(width, height, depth, filters, latent_dim):
-        input_shape = (height, width, depth)
-        channel_dimension = -1
-        # start building model
-        encoder = Sequential()
-        # define the input to the encoder
-        encoder.add(Input(shape=input_shape))
-        for f in filters:
-            encoder.add(Conv2D(f, (3, 3), strides=2, padding="same"))
-            encoder.add(LeakyReLU(alpha=0.2))
-            encoder.add(BatchNormalization(axis=channel_dimension))
-        size_of_last_conv = encoder.layers[-1].input_shape
-        encoder.add(Flatten())
-        encoder.add(Dense(latent_dim, name="encoded"))
-        return encoder, size_of_last_conv
+    def build(width, height, depth):
+        STRIDE = 2
+        POOLING = False
+        BIAS = True
+        assert POOLING + STRIDE == 2
 
-    @staticmethod
-    def build_decoder(depth, latent_dim, size, filters):
-        channel_dimension = -1
-        decoder = Sequential()
-        decoder.add(Dense(np.prod(size[1:]), input_shape=(latent_dim,)))
-        decoder.add(Reshape((size[1], size[2], size[3])))
-        for f in filters[::-1]:
-            decoder.add(Conv2DTranspose(f, (3, 3), strides=2, padding="same"))
-            decoder.add(LeakyReLU(alpha=0.2))
-            decoder.add(BatchNormalization(axis=channel_dimension))
-        decoder.add(Conv2DTranspose(depth, (3, 3), padding="same"))
-        decoder.add(Activation("sigmoid", name="decoded"))
-        return decoder
+        inputs = Input(shape=(width, height, depth))
+        x = GaussianNoise(0.1)(inputs)
 
-    def __init__(self, width, height, depth, filters=(32, 64), latent_dim=16):
-        super(ConvolutionalAutoencoder, self).__init__()
-        self.encoder, size = self.build_encoder(width, height, depth, filters, latent_dim)
-        self.decoder = self.build_decoder(depth, latent_dim, size, filters)
+        conv_1 = Conv2D(32, (3, 3), padding="same", strides=1, use_bias=BIAS)
+        x = conv_1(x)
+        x = BatchNormalization()(x)
+        x = PReLU(alpha_initializer=Constant(value=0.25))(x)
 
-    def call(self, x, training=None, mask=None):
-        encoded = self.encoder(x)
-        decoded = self.decoder(encoded)
-        return decoded
+        conv_2 = Conv2D(32, (3, 3), padding="same", strides=STRIDE, use_bias=BIAS)
+        x = conv_2(x)
+        x = BatchNormalization()(x)
+        x = PReLU(alpha_initializer=Constant(value=0.25))(x)
+
+        if POOLING:
+            x = MaxPooling2D((2, 2))(x)
+
+        conv_3 = Conv2D(64, (3, 3), padding="same", strides=1, use_bias=BIAS)
+        x = conv_3(x)
+        x = BatchNormalization()(x)
+        x = PReLU(alpha_initializer=Constant(value=0.25))(x)
+
+        conv_4 = Conv2D(64, (3, 3), padding="same", strides=STRIDE, use_bias=BIAS)
+        x = conv_4(x)
+        x = BatchNormalization()(x)
+        x = PReLU(alpha_initializer=Constant(value=0.25))(x)
+
+        if POOLING:
+            x = MaxPooling2D((2, 2))(x)
+
+        conv_5 = Conv2D(128, (3, 3), padding="same", strides=1, use_bias=BIAS)
+        x = conv_5(x)
+        x = BatchNormalization()(x)
+        x = PReLU(alpha_initializer=Constant(value=0.25))(x)
+
+        conv_6 = Conv2D(128, (3, 3), padding="same", strides=STRIDE, use_bias=BIAS)
+        x = conv_6(x)
+        x = BatchNormalization()(x)
+        x = PReLU(alpha_initializer=Constant(value=0.25))(x)
+
+        if POOLING:
+            x = MaxPooling2D((2, 2))(x)
+
+        conv_7 = Conv2D(256, (3, 3), padding="same", strides=1, use_bias=BIAS)
+        x = conv_7(x)
+        x = BatchNormalization()(x)
+        x = PReLU(alpha_initializer=Constant(value=0.25))(x)
+
+        conv_8 = Conv2D(256, (3, 3), padding="same", strides=STRIDE, use_bias=BIAS)
+        x = conv_8(x)
+        x = BatchNormalization()(x)
+        x = PReLU(alpha_initializer=Constant(value=0.25))(x)
+
+        if POOLING:
+            x = MaxPooling2D((2, 2))(x)
+
+        conv_9 = Conv2D(512, (3, 3), padding="same", strides=1, use_bias=BIAS)
+        x = conv_9(x)
+        x = BatchNormalization()(x)
+        x = PReLU(alpha_initializer=Constant(value=0.25))(x)
+
+        conv_10 = Conv2D(512, (3, 3), padding="same", strides=STRIDE, use_bias=BIAS)
+        x = conv_10(x)
+        x = BatchNormalization()(x)
+        x = PReLU(alpha_initializer=Constant(value=0.25))(x)
+
+        if POOLING:
+            x = MaxPooling2D((2, 2))(x)
+
+        # flatten the network and then construct the latent vector
+        volumeSize = K.int_shape(x)
+        x = Flatten()(x)
+        latent = Dense(1024, name="encoded")
+        x = latent(x)
+        x = DenseTied(np.prod(volumeSize[1:]), tied_to=latent)(x)
+
+        # start building the decoder model which will accept the
+        # output of the encoder as its inputs
+        x = Reshape((volumeSize[1], volumeSize[2], volumeSize[3]))(x)
+
+        if POOLING:
+            x = UpSampling2D()(x)
+
+        x = TiedConv2DTranspose(512, (3, 3), padding="same", tied_to=conv_10, strides=STRIDE, use_bias=BIAS)(x)
+        x = BatchNormalization()(x)
+        x = PReLU(alpha_initializer=Constant(value=0.25))(x)
+
+        x = TiedConv2DTranspose(256, (3, 3), padding="same", tied_to=conv_9, strides=1, use_bias=BIAS)(x)
+        x = BatchNormalization()(x)
+        x = PReLU(alpha_initializer=Constant(value=0.25))(x)
+
+        if POOLING:
+            x = UpSampling2D()(x)
+
+        x = TiedConv2DTranspose(256, (3, 3), padding="same", tied_to=conv_8, strides=STRIDE, use_bias=BIAS)(x)
+        x = BatchNormalization()(x)
+        x = PReLU(alpha_initializer=Constant(value=0.25))(x)
+
+        x = TiedConv2DTranspose(128, (3, 3), padding="same", tied_to=conv_7, strides=1, use_bias=BIAS)(x)
+        x = BatchNormalization()(x)
+        x = PReLU(alpha_initializer=Constant(value=0.25))(x)
+
+        if POOLING:
+            x = UpSampling2D()(x)
+
+        x = TiedConv2DTranspose(128, (3, 3), padding="same", tied_to=conv_6, strides=STRIDE, use_bias=BIAS)(x)
+        x = BatchNormalization()(x)
+        x = PReLU(alpha_initializer=Constant(value=0.25))(x)
+
+        x = TiedConv2DTranspose(64, (3, 3), padding="same", tied_to=conv_5, strides=1, use_bias=BIAS)(x)
+        x = BatchNormalization()(x)
+        x = PReLU(alpha_initializer=Constant(value=0.25))(x)
+
+        if POOLING:
+            x = UpSampling2D()(x)
+
+        x = TiedConv2DTranspose(64, (3, 3), padding="same", tied_to=conv_4, strides=STRIDE, use_bias=BIAS)(x)
+        x = BatchNormalization()(x)
+        x = PReLU(alpha_initializer=Constant(value=0.25))(x)
+
+        x = TiedConv2DTranspose(32, (3, 3), padding="same", tied_to=conv_3, strides=1, use_bias=BIAS)(x)
+        x = BatchNormalization()(x)
+        x = PReLU(alpha_initializer=Constant(value=0.25))(x)
+
+        if POOLING:
+            x = UpSampling2D()(x)
+
+        x = TiedConv2DTranspose(32, (3, 3), padding="same", tied_to=conv_2, strides=STRIDE, use_bias=BIAS)(x)
+        x = BatchNormalization()(x)
+        x = PReLU(alpha_initializer=Constant(value=0.25))(x)
+
+        x = TiedConv2DTranspose(3, (3, 3), padding="same", tied_to=conv_1, strides=1, use_bias=BIAS)(x)
+        x = BatchNormalization()(x)
+        outputs = Activation("sigmoid")(x)
+        ae = Model(inputs=inputs, outputs=outputs)
+        return ae
 
 
 if __name__ == "__main__":
-    (x_train, _), (x_test, _) = fashion_mnist.load_data()
-
-    x_train = x_train.astype('float32') / 255.
-    x_test = x_test.astype('float32') / 255.
-    latent_dim = 64
-
-    x_train = x_train[:10000]
-
-    x_train = x_train.reshape(*x_train.shape, 1)
-    x_test = x_test.reshape(*x_test.shape, 1)
-
-    EPOCHS = 1
-    INIT_LR = 1e-3
-    BS = 64
-
-
-    model_path = os.path.sep.join(["output", "checkpoints"])
-
-    model_checkpoint = ModelCheckpoint(
-        model_path, monitor="val_loss", verbose=1, save_best_only=False, save_weights_only=False, mode='auto', period=1
-    )
-    try:
-        autoencoder = load_model(model_path)
-        print([f"INFO: old learning rate {K.get_value(autoencoder.optimizer.lr)}"])
-        K.set_value(autoencoder.optimizer.lr, 1e-3)
-        print([f"INFO: new learning rate {K.get_value(autoencoder.optimizer.lr)}"])
-    except:
-        autoencoder = ConvolutionalAutoencoder(28, 28, 1, latent_dim=latent_dim)
-        opt = Adam(learning_rate=INIT_LR)
-        autoencoder.compile(optimizer=opt, loss=losses.MeanSquaredError())
-    autoencoder.fit(x_train, x_train,
-                    epochs=EPOCHS,
-                    shuffle=True,
-                    validation_data=(x_test, x_test),
-                    callbacks=[],
-                    verbose=1)
-    encoded_imgs = autoencoder.encoder(x_test).numpy()
-    decoded_imgs = autoencoder.decoder(encoded_imgs).numpy()
+    ae = ConvAutoencoder.build(224, 224, 3)
+    print(ae.summary())
